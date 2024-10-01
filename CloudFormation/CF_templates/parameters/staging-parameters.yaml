@@ -1,0 +1,52 @@
+Parameters:
+  VpcCidr:
+    Value: "10.0.1.0/16"
+
+  VpcName:
+    Value: "AshokStagingVPC"
+
+  PublicSubnetCidr:
+    Value: "10.0.3.0/24"
+
+  PrivateSubnetCidr:
+    Value: "10.0.4.0/24"
+
+  KeyName:
+    Value: "your-staging-key-name" # Replace with your key pair name
+
+  Environment:
+    Value: "staging"
+
+  InstanceType:
+    Value: "t2.micro"
+
+  AmiId:
+    Value: "ami-0abcdef1234567890" # Replace with your desired AMI ID
+
+  OSSecurityGroupId:
+    Value: "AshokStagingSecurityGroup"
+
+  DBInstanceClass:
+    Value: "db.t2.micro"
+
+  DBName:
+    Value: "AshokStagingDatabase"
+
+  DBUsername:
+    Value: "stagingadmin"
+
+  DBPassword:
+    Value: "staging-db-password" # Replace with your desired DB password
+
+  BucketName:
+    Value: "ashok-staging-static-files"
+
+  CloudWatchAlarmName:
+    Value: "AshokStagingHighCPUAlarm"
+
+  AlarmThreshold:
+    Value: 80
+
+  SnsTopicArn:
+    Value: "arn:aws:sns:region:account-id:HighCPUAlarmNotifications" # Replace with actual ARN
+

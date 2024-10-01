@@ -1,0 +1,259 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template for Ashok's application with security and management features
+
+# Defining Parameters used for entire template.
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Description: CIDR block for the VPC
+
+  VpcName:
+    Type: String
+    Description: Name of the VPC
+
+  PublicSubnetCidr:
+    Type: String
+    Description: CIDR block for the public subnet
+
+  PrivateSubnetCidr:
+    Type: String
+    Description: CIDR block for the private subnet
+
+  KeyName:
+    Type: String
+    Description: Key pair for SSH access
+
+  Environment:
+    Type: String
+    Description: Deployment environment (dev, stage, prod)
+
+  InstanceType:
+    Type: String
+    Description: EC2 instance type
+
+  AmiId:
+    Type: String
+    Description: AMI ID for the EC2 instance
+
+  OSSecurityGroupId:
+    Type: String
+    Description: Security Group ID for the application
+
+  DBInstanceClass:
+    Type: String
+    Description: RDS DB instance class
+
+  DBName:
+    Type: String
+    Description: RDS database name
+
+  DBUsername:
+    Type: String
+    Description: RDS master username
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: RDS master password
+
+  BucketName:
+    Type: String
+    Description: S3 bucket name for static file storage
+
+  CloudWatchAlarmName:
+    Type: String
+    Description: CloudWatch alarm name for CPU monitoring
+
+  AlarmThreshold:
+    Type: Number
+    Description: CPU Utilization alarm threshold
+
+  SnsTopicArn:
+    Type: String
+    Description: SNS Topic ARN for alarm notifications.
+
+# Defining Resources for AWS cloud
+
+Resources:
+  # Creating a VPC for the application with DNS support and hostnames enabled
+  OSVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref VpcName
+
+  # Creating a public subnet within the VPC
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref OSVPC
+      CidrBlock: !Ref PublicSubnetCidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs us-east-1
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-public-subnet"
+
+  # Creating a private subnet within the VPC
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref OSVPC
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs us-east-1
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-private-subnet"
+
+  # Creating an Internet Gateway to allow internet access to the VPC
+  OSInternetGateway: 
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-igw"
+
+  # Attaching the Internet Gateway to the VPC
+  OSAttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref OSVPC
+      InternetGatewayId: !Ref OSInternetGateway
+
+  # Creating a security group for the application to control inbound traffic
+  OSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for OS application
+      VpcId: !Ref OSVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Ref OSSecurityGroupId
+
+  # Creating an EC2 instance in the public subnet for application deployment
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref OSSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-ec2-instance"
+
+  # Creating an RDS database instance in the private subnet
+  MyDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: MySQL
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      AllocatedStorage: '20'
+      VPCSecurityGroups:
+        - !Ref OSSecurityGroupId
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+
+  # Creating a DB subnet group for the RDS instance to operate within the private subnet
+  MyDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "${VpcName}-db-subnet-group"
+      SubnetIds:
+        - !Ref PrivateSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-db-subnet-group"
+
+  # Creating an S3 bucket for storing static files
+  StaticFileBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcName}-static-files"
+
+  # Creating a CloudWatch alarm for monitoring CPU utilization of the EC2 instance
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub "Alarm when CPU exceeds ${AlarmThreshold}%"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Ref AlarmThreshold
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref SnsTopicArn # Added SNS Topic ARN to alarm actions
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref MyEC2Instance
+
+  # Creating an SNS topic for sending alarm notifications
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub "${VpcName} High CPU Alarm Notifications"
+      Subscription:
+        - Endpoint: !Ref SnsTopicArn
+          Protocol: email # Change as needed
+
+#defining Outputs
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref OSVPC
+
+  PublicSubnetId:
+    Description: Public Subnet ID
+    Value: !Ref PublicSubnet
+
+  PrivateSubnetId:
+    Description: Private Subnet ID
+    Value: !Ref PrivateSubnet
+
+  SecurityGroupId:
+    Description: Security Group ID
+    Value: !Ref OSSecurityGroupId
+
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref MyEC2Instance
+
+  EC2InstancePublicIP:  # Output for EC2 Instance Public IP
+    Description: EC2 Instance Public IP Address
+    Value: !GetAtt MyEC2Instance.PublicIp  # Retrieves the Public IP of the EC2 instance
+
+  DBInstanceId:
+    Description: RDS Instance ID
+    Value: !Ref MyDBInstance
+
+  S3BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref StaticFileBucket

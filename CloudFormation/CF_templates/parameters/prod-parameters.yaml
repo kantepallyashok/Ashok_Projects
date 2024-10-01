@@ -1,0 +1,52 @@
+Parameters:
+  VpcCidr:
+    Value: "10.0.2.0/16"
+
+  VpcName:
+    Value: "AshokProdVPC"
+
+  PublicSubnetCidr:
+    Value: "10.0.5.0/24"
+
+  PrivateSubnetCidr:
+    Value: "10.0.6.0/24"
+
+  KeyName:
+    Value: "your-prod-key-name" # Replace with your key pair name
+
+  Environment:
+    Value: "prod"
+
+  InstanceType:
+    Value: "t2.micro"
+
+  AmiId:
+    Value: "ami-0abcdef1234567890" # Replace with your desired AMI ID
+
+  OSSecurityGroupId:
+    Value: "AshokProdSecurityGroup"
+
+  DBInstanceClass:
+    Value: "db.t2.micro"
+
+  DBName:
+    Value: "AshokProdDatabase"
+
+  DBUsername:
+    Value: "prodadmin"
+
+  DBPassword:
+    Value: "prod-db-password" # Replace with your desired DB password
+
+  BucketName:
+    Value: "ashok-prod-static-files"
+
+  CloudWatchAlarmName:
+    Value: "AshokProdHighCPUAlarm"
+
+  AlarmThreshold:
+    Value: 80
+
+  SnsTopicArn:
+    Value: "arn:aws:sns:region:account-id:HighCPUAlarmNotifications" # Replace with actual ARN
+

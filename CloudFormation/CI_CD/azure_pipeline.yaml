@@ -1,0 +1,188 @@
+trigger:
+  paths:
+    include:
+    - '**'
+
+pr:
+  paths:
+    include:
+    - '**'
+
+  ## Manditory inputs to give ADO pipeline , please look into variables section
+  ## $(AWS_REGION)  Specify your AWS region as a secret variable
+  ## $(PEM_FILE_PATH) Name of the PEM file in Secure Files
+  ## $(SNS_TOPIC_ARN) ARN of the SNS topic for notifications
+  ## AWS credentials, and email users
+
+variables:
+  DEV_FEED_NAME: 'DEVELOPMENT_ENV_APP'
+  STAGING_FEED_NAME: 'STAGING_ENV_APP'
+  PROD_FEED_NAME: 'PRODUCTION_ENV_APP'
+  S3_BUCKET_NAME: ''
+  AWS_REGION: $(AWS_REGION)
+  PEM_FILE_PATH: $(PEM_FILE_PATH)
+  SNS_TOPIC_ARN: $(SNS_TOPIC_ARN)
+  APPROVER_1_EMAIL: $(APPROVER_1_EMAIL) # First approver email (set as secret variable)
+  APPROVER_2_EMAIL: $(APPROVER_2_EMAIL) # Second approver email (set as secret variable)
+  TEAM_EMAIL: $(TEAM_EMAIL) # Team email for notifications (set as secret variable)
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: 'Build Stage'
+  jobs:
+  - job: BuildFrontend
+    displayName: 'Build Frontend'
+    steps:
+    - checkout: self
+    - script: |
+        echo "1/3 Building frontend..."
+        cd client
+        npm install
+        npm run build
+      displayName: 'Build Frontend'
+
+  - job: BuildBackend
+    displayName: 'Build Backend'
+    dependsOn: BuildFrontend
+    steps:
+    - checkout: self
+    - script: |
+        echo "2/3 Building backend..."
+        cd server
+        make build
+        make install
+      displayName: 'Build Backend'
+
+  - job: RunTests
+    displayName: 'Run Tests'
+    dependsOn: BuildBackend
+    steps:
+    - checkout: self
+    - script: |
+        echo "3/3 Running backend tests..."
+        cd server
+        make test
+      displayName: 'Run Backend Tests'
+
+    - script: |
+        echo "Running frontend tests..."
+        cd client
+        npm test
+      displayName: 'Run Frontend Tests'
+
+  - job: CreateArtifact
+    displayName: 'Create Artifacts'
+    dependsOn: RunTests
+    steps:
+    - checkout: self
+    - script: |
+        echo "Generating zip for deployment..."
+        cd client
+        zip -r ../dist/opensupports.zip build
+        cd ../server
+        zip -ur ../dist/opensupports.zip api
+      displayName: 'Create Deployment Artifact'
+
+  - job: PublishArtifact
+    displayName: 'Publish Artifacts'
+    dependsOn: CreateArtifact
+    steps:
+    - publish: dist/opensupports.zip
+      artifact: opensupports
+
+- stage: UploadToS3
+  displayName: 'Upload Artifact to S3'
+  dependsOn: PublishArtifact
+  condition: succeeded('PublishArtifact')
+  pool:
+    vmImage: 'ubuntu-latest'
+
+  steps:
+  - script: "echo \"Fetching S3 Bucket Name from CloudFormation Outputs...\"\nS3_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name your-stack-name --query \"Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue\" --output text)\necho \"##vso[task.setvariable variable=S3_BUCKET_NAME]$S3_BUCKET_NAME\"  \n"
+    displayName: 'Get S3 Bucket Name'
+
+  - task: AWSCLI@1
+    inputs:
+      awsCredentials: 'YourAWSCredentialsServiceConnection' # Replace with your AWS service connection name
+      regionName: $(AWS_REGION)
+      command: 's3 cp'
+      arguments: '$(Pipeline.Workspace)/dist/opensupports.zip s3://$(S3_BUCKET_NAME)/opensupports.zip' # Upload the artifact to S3
+
+- stage: Dev
+  displayName: 'Development Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'dev-parameters.yaml'))
+  steps:
+  - template: deploy-template.yaml
+    parameters:
+      stageName: 'Development'
+      stackName: 'dev-stack'
+      parametersFile: 'dev-parameters.yaml'
+      feedName: '$(DEV_FEED_NAME)'
+      failureMessage: "Dev stage failed."
+
+- stage: Staging
+  displayName: 'Staging Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'staging-parameters.yaml'))
+  dependsOn: Dev
+  steps:
+  - template: deploy-template.yaml
+    parameters:
+      stageName: 'Staging'
+      stackName: 'staging-stack'
+      parametersFile: 'staging-parameters.yaml'
+      feedName: '$(STAGING_FEED_NAME)'
+      failureMessage: "Staging stage failed."
+
+#After staging stage gets success, it will wait for approval from 2 users, for 60 minutes,
+#if 2 users  didnt respond, it will send notification to entire team mail, and someone has to approve manulaly. if deployement fails, it sends notification.
+#Initially only 2 users ( Manager, TL) will have access to approve.No other tem member will get access for first 60 minutes.
+#After 60 minutes, on demand case we can enable team members permissions, and get approval.
+
+
+- stage: Prod
+  displayName: 'Production Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'prod-parameters.yaml'))
+  dependsOn: Staging
+  jobs:
+  - job: Approval
+    displayName: 'Approval Job'
+    steps:
+    - script: |
+        echo "Sending approval notification to $(APPROVER_1_EMAIL) and $(APPROVER_2_EMAIL)..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Please approve the deployment to Production." --subject "Production Deployment Approval Needed"
+      displayName: 'Send Approval Notification to 2 Users'
+
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'true'
+        approvers: '$(APPROVER_1_EMAIL),$(APPROVER_2_EMAIL)' # Initial approvers
+        timeout: 60 # Wait for 60 minutes for the first approval
+        onTimeout: 'reject'
+        message: 'Please approve the deployment to Production.'
+
+    - script: |
+        echo "No approvals received. Sending notification to entire team..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "No approvals received within 60 minutes. Team, please take action." --subject "Final Production Deployment Approval Needed"
+        echo "Waiting for additional 120 minutes for manual approval..."
+        sleep 7200  # Wait for another 2 hours
+      displayName: 'Notify Team of Approval Delay'
+      condition: failed() # Trigger if previous step failed
+
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'true'
+        approvers: '$(TEAM_EMAIL)' # Entire team will get approval permission now
+        timeout: 120 # Wait for 2 hours for team approval
+        onTimeout: 'reject'
+        message: 'Please approve the deployment to Production.'
+
+    - template: deploy-template.yaml
+      parameters:
+        stageName: 'Production'
+        stackName: 'prod-stack'
+        parametersFile: 'prod-parameters.yaml'
+        feedName: '$(PROD_FEED_NAME)'
+        failureMessage: "Production stage failed."

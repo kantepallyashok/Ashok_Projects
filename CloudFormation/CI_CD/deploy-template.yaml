@@ -1,0 +1,58 @@
+# deploy-template.yaml
+parameters:
+- name: stageName
+  type: string
+- name: stackName
+  type: string
+- name: parametersFile
+  type: string
+- name: feedName
+  type: string
+- name: failureMessage
+  type: string
+
+
+jobs:
+- job: CheckoutAndCreateInfrastructure
+  displayName: 'Checkout and Create Infrastructure for $(stageName)'
+  steps:
+  - checkout: self # Checkout the code
+  - script: |
+      echo "Creating Infrastructure for $(stageName)..."
+      aws cloudformation create-stack --stack-name $(stackName) \
+        --template-body file://Infrastructure/Infrastructure.yaml \
+        --parameters file://CF_templates/parameters/$(parametersFile)
+
+    displayName: 'Create $(stageName) Infrastructure'
+
+  - script: |
+      echo "Waiting for stack creation to complete..."
+      aws cloudformation wait stack-create-complete --stack-name $(stackName)
+    displayName: 'Wait for Stack Creation'
+
+  - script: |
+      echo "Fetching EC2 instance IP address..."
+      EC2_IP=$(aws cloudformation describe-stacks --stack-name $(stackName) --query "Stacks[0].Outputs[?OutputKey=='EC2InstancePublicIP'].OutputValue" --output text)
+      echo "##vso[task.setvariable variable=EC2_IP]$EC2_IP"
+    displayName: 'Get EC2 IP Address'
+
+  - task: DownloadSecureFile@1
+    name: downloadPemFile
+    inputs:
+      secureFile: '$(PEM_FILE_PATH)' # Name of the PEM file in Secure Files
+
+  - script: |
+      echo "Deploying to $(stageName) Environment..."
+      chmod 400 $(downloadPemFile.secureFilePath)
+      mkdir -p ~/artifacts && cd ~/artifacts
+      echo "Downloading opensupports artifact..."
+      az artifacts universal download --name opensupports --version 1.0.0 --path . --feed $(feedName)
+      echo "Deploying to EC2 instance..."
+      scp -i $(downloadPemFile.secureFilePath) -r * ec2-user@$(EC2_IP):/path/to/deployment/directory
+    displayName: 'Deploy to $(stageName)'
+
+  - script: |
+      echo "Sending failure notification if the job fails..."
+      aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "$(failureMessage)" --subject "Stage Failure Notification"
+    displayName: 'Send Failure Notification'
+    condition: failed()
