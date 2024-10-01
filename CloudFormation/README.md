@@ -139,7 +139,7 @@ Steps to deploye application:
 3. Note down all AWS keys, and variables need to give as pipeline secret variables, while creating pipeline give this secrets.
 4. Run the pipeline, check the stages are successfully completed or not and check email is sending notification or not.
 5. check application running or not by using "http://your-ec2-public-ip:your-port-number"
-Ex: 
+**Ex:** 
    - ssh -i path/to/your/key.pem ubuntu@your-ec2-public-ip
    - curl http://localhost:your-port-number
    - systemctl status your-service-name

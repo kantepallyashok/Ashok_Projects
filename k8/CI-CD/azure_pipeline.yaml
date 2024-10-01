@@ -1,0 +1,168 @@
+trigger:
+  branches:
+    include:
+    - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  awsRegion: '<YourAWSRegion>' # e.g., 'us-east-1'
+  awsAccountId: '<YourAWSAccountId>' # e.g., '123456789012'
+  ecrRepositoryFrontend: 'frontend'
+  ecrRepositoryBackend: 'backend'
+  imageTag: '$(Build.BuildId)' # Use build ID as image tag
+  SNS_TOPIC_ARN: '<YourSnsTopicArn>' # AWS SNS Topic ARN for notifications
+  DEV_FEED_NAME: '<YourDevFeedName>'
+  STAGING_FEED_NAME: '<YourStagingFeedName>'
+  PROD_FEED_NAME: '<YourProdFeedName>'
+  APPROVER_1_EMAIL: '<approver1@example.com>' # Replace with actual approver's email
+  APPROVER_2_EMAIL: '<approver2@example.com>' # Replace with actual approver's email
+  TEAM_EMAIL: '<team@example.com>' # Replace with team email for final approval
+  kubectlServiceConnection: 'MyKubernetesConnection'
+
+jobs:
+- job: BuildAndPush
+  displayName: 'Build and Push Docker Images to AWS ECR'
+  steps:
+  - task: AWSCLI@1
+    inputs:
+      awsCredentials: '<YourAWSServiceConnection>' # Azure DevOps service connection for AWS
+      regionName: '$(awsRegion)'
+      command: 'ecr get-login-password'
+    name: GetECRLogin
+
+  - script: |
+      echo "$(GetECRLogin.awsCliLoginPassword)" | docker login --username AWS --password-stdin $(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com
+    displayName: 'Login to ECR'
+
+  - task: Docker@2
+    displayName: 'Build Frontend Docker Image'
+    inputs:
+      containerRegistry: '$(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com'
+      repository: '$(ecrRepositoryFrontend)'
+      command: 'build'
+      Dockerfile: '../frontend/Dockerfile'
+      tags: |
+        $(imageTag)
+
+  - script: |
+      docker run --rm $(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com/$(ecrRepositoryFrontend):$(imageTag) npm test  # Adjust the command based on your test command
+    displayName: 'Run Frontend Tests'
+
+  - task: Docker@2
+    displayName: 'Build Backend Docker Image'
+    inputs:
+      containerRegistry: '$(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com'
+      repository: '$(ecrRepositoryBackend)'
+      command: 'build'
+      Dockerfile: '../backend/Dockerfile'
+      tags: |
+        $(imageTag)
+
+  - script: |
+      docker run --rm $(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com/$(ecrRepositoryBackend):$(imageTag) npm test  # Adjust the command based on your test command
+    displayName: 'Run Backend Tests'
+
+  - task: Docker@2
+    displayName: 'Push Frontend Docker Image to ECR'
+    inputs:
+      containerRegistry: '$(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com'
+      repository: '$(ecrRepositoryFrontend)'
+      command: 'push'
+      tags: |
+        $(imageTag)
+
+  - task: Docker@2
+    displayName: 'Push Backend Docker Image to ECR'
+    inputs:
+      containerRegistry: '$(awsAccountId).dkr.ecr.$(awsRegion).amazonaws.com'
+      repository: '$(ecrRepositoryBackend)'
+      command: 'push'
+      tags: |
+        $(imageTag)
+
+- stage: Dev
+  displayName: 'Development Stage'
+  jobs:
+  - job: ProvisionK8sInfrastructureDev
+    displayName: 'Provision Kubernetes Infrastructure for Dev'
+    steps:
+    - template: ../K8_infrastructure/terraform/infra-template.yaml
+      parameters:
+        stageName: 'Dev'
+        parametersFile: '../K8_infrastructure/terraform/dev.tfvars'
+
+    - script: |
+        echo "Deploying Frontend and Backend to Kubernetes..."
+        kubectl apply -f ../k8_Deploy/frontend-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        kubectl apply -f ../k8_Deploy/backend-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        kubectl apply -f ../k8_Deploy/mongo-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        echo "Kubernetes deployment completed."
+      displayName: 'Deploy to Kubernetes'
+
+    - script: |
+        echo "Sending failure notification for Dev stage..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Dev stage failed. Please check the logs." --subject "Dev Stage Failure Notification"
+      displayName: 'Notify on Failure'
+      condition: failed() # Trigger this step only if the previous steps failed
+
+# Staging Stage
+- stage: Staging
+  displayName: 'Staging Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'staging-parameters.yaml'))
+  dependsOn: Dev
+  jobs:
+  - job: ProvisionK8sInfrastructureStaging
+    displayName: 'Provision Kubernetes Infrastructure for Staging'
+    steps:
+    - template: ../K8_infrastructure/terraform/infra-template.yaml
+      parameters:
+        stageName: 'Staging'
+        parametersFile: '../K8_infrastructure/terraform/staging.tfvars'
+
+    - script: |
+        echo "Deploying Frontend and Backend to Kubernetes..."
+        kubectl apply -f ../k8_Deploy/frontend-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        kubectl apply -f ../k8_Deploy/backend-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        kubectl apply -f ../k8_Deploy/mongo-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        echo "Kubernetes deployment completed."
+      displayName: 'Deploy to Kubernetes'
+
+    - script: |
+        echo "Sending failure notification for Staging stage..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Staging stage failed. Please check the logs." --subject "Staging Stage Failure Notification"
+      displayName: 'Notify on Failure'
+      condition: failed() # Trigger this step only if the previous steps failed
+
+# Production Stage
+- stage: Prod
+  displayName: 'Production Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'prod-parameters.yaml'))
+  dependsOn: Staging
+  jobs:
+  - job: Approval
+    displayName: 'Approval Job'
+    steps:
+    - script: |
+        echo "Sending approval notification to $(APPROVER_1_EMAIL) and $(APPROVER_2_EMAIL)..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Please approve the deployment to Production." --subject "Production Deployment Approval Needed"
+      displayName: 'Send Approval Notification to 2 Users'
+
+    - script: |
+        echo "Waiting for approval..."
+        # Implement your approval logic here (e.g., using manual intervention or approval gates)
+
+    - script: |
+        echo "Deploying Frontend and Backend to Kubernetes..."
+        kubectl apply -f ../k8_Deploy/frontend-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        kubectl apply -f ../k8_Deploy/backend-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        kubectl apply -f ../k8_Deploy/mongo-deployment.yaml --kubeconfig $(kubectlServiceConnection)
+        echo "Kubernetes deployment completed."
+      displayName: 'Deploy to Kubernetes'
+
+    - script: |
+        echo "Sending failure notification for Production stage..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Production stage failed. Please check the logs." --subject "Production Stage Failure Notification"
+      displayName: 'Notify on Failure'
+      condition: failed() # Trigger this step only if the previous steps failed
