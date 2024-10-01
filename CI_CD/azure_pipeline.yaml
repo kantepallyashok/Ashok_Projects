@@ -1,0 +1,194 @@
+trigger:
+  paths:
+    include:
+    - '**'
+
+pr:
+  paths:
+    include:
+    - '**'
+
+variables:
+  DEV_FEED_NAME: 'DEVELOPMENT_ENV_APP'
+  STAGING_FEED_NAME: 'STAGING_ENV_APP'
+  PROD_FEED_NAME: 'PRODUCTION_ENV_APP'
+  AWS_REGION: $(AWS_REGION)
+  PEM_FILE_PATH: $(PEM_FILE_PATH)
+  SNS_TOPIC_ARN: $(SNS_TOPIC_ARN)
+  APPROVER_1_EMAIL: $(APPROVER_1_EMAIL) # First approver email (set as secret variable)
+  APPROVER_2_EMAIL: $(APPROVER_2_EMAIL) # Second approver email (set as secret variable)
+  TEAM_EMAIL: $(TEAM_EMAIL) # Team email for notifications (set as secret variable)
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: 'Build Stage'
+  jobs:
+  - job: BuildFrontend
+    displayName: 'Build Frontend'
+    steps:
+    - checkout: self
+    - script: |
+        echo "Building frontend..."
+        cd client
+        npm install
+        npm run build
+      displayName: 'Build Frontend'
+
+  - job: BuildBackend
+    displayName: 'Build Backend'
+    dependsOn: BuildFrontend
+    steps:
+    - checkout: self
+    - script: |
+        echo "Building backend..."
+        cd server
+        make build
+        make install
+      displayName: 'Build Backend'
+
+  - job: RunTests
+    displayName: 'Run Tests'
+    dependsOn: BuildBackend
+    steps:
+    - checkout: self
+    - script: |
+        echo "Running backend tests..."
+        cd server
+        make test
+      displayName: 'Run Backend Tests'
+
+    - script: |
+        echo "Running frontend tests..."
+        cd client
+        npm test
+      displayName: 'Run Frontend Tests'
+
+  - job: CreateArtifact
+    displayName: 'Create Artifacts'
+    dependsOn: RunTests
+    steps:
+    - checkout: self
+    - script: |
+        echo "Generating zip for deployment..."
+        cd client
+        zip -r ../dist/opensupports.zip build
+        cd ../server
+        zip -ur ../dist/opensupports.zip api
+      displayName: 'Create Deployment Artifact'
+
+  - job: PublishArtifact
+    displayName: 'Publish Artifacts'
+    dependsOn: CreateArtifact
+    steps:
+    - publish: dist/opensupports.zip
+      artifact: opensupports
+
+- stage: TerraformInit
+  displayName: 'Terraform Init Stage'
+  jobs:
+  - job: TerraformInitJob
+    displayName: 'Initialize Terraform'
+    steps:
+    - checkout: self
+    - script: |
+        echo "Initializing Terraform..."
+        terraform init
+      displayName: 'Terraform Init'
+
+- stage: TerraformPlan
+  displayName: 'Terraform Plan Stage'
+  jobs:
+  - job: TerraformPlanJob
+    displayName: 'Run Terraform Plan'
+    steps:
+    - checkout: self
+    - script: |
+        echo "Running Terraform Plan..."
+        terraform plan -var-file=dev.tfvars -out=tfplan
+      displayName: 'Terraform Plan'
+
+- stage: TerraformApply
+  displayName: 'Terraform Apply Stage'
+  dependsOn: TerraformPlan
+  jobs:
+  - job: TerraformApplyJob
+    displayName: 'Apply Terraform Plan'
+    steps:
+    - checkout: self
+    - script: |
+        echo "Applying Terraform Plan..."
+        terraform apply -auto-approve tfplan
+      displayName: 'Terraform Apply'
+
+- stage: Dev
+  displayName: 'Development Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'dev-parameters.yaml'))
+  steps:
+  - template: deploy-template.yaml
+    parameters:
+      stageName: 'Development'
+      stackName: 'dev-stack'
+      parametersFile: 'dev-parameters.yaml'
+      feedName: '$(DEV_FEED_NAME)'
+      failureMessage: "Dev stage failed."
+
+- stage: Staging
+  displayName: 'Staging Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'staging-parameters.yaml'))
+  dependsOn: Dev
+  steps:
+  - template: deploy-template.yaml
+    parameters:
+      stageName: 'Staging'
+      stackName: 'staging-stack'
+      parametersFile: 'staging-parameters.yaml'
+      feedName: '$(STAGING_FEED_NAME)'
+      failureMessage: "Staging stage failed."
+
+- stage: Prod
+  displayName: 'Production Stage'
+  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'prod-parameters.yaml'))
+  dependsOn: Staging
+  jobs:
+  - job: Approval
+    displayName: 'Approval Job'
+    steps:
+    - script: |
+        echo "Sending approval notification to $(APPROVER_1_EMAIL) and $(APPROVER_2_EMAIL)..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Please approve the deployment to Production." --subject "Production Deployment Approval Needed"
+      displayName: 'Send Approval Notification to 2 Users'
+
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'true'
+        approvers: '$(APPROVER_1_EMAIL),$(APPROVER_2_EMAIL)' # Initial approvers
+        timeout: 60 # Wait for 60 minutes for the first approval
+        onTimeout: 'reject'
+        message: 'Please approve the deployment to Production.'
+
+    - script: |
+        echo "No approvals received. Sending notification to entire team..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "No approvals received within 60 minutes. Team, please take action." --subject "Final Production Deployment Approval Needed"
+        echo "Waiting for additional 120 minutes for manual approval..."
+        sleep 7200  # Wait for another 2 hours
+      displayName: 'Notify Team of Approval Delay'
+      condition: failed() # Trigger if previous step failed
+
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'true'
+        approvers: '$(TEAM_EMAIL)' # Entire team will get approval permission now
+        timeout: 120 # Wait for 2 hours for team approval
+        onTimeout: 'reject'
+        message: 'Please approve the deployment to Production.'
+
+    - template: deploy-template.yaml
+      parameters:
+        stageName: 'Production'
+        stackName: 'prod-stack'
+        parametersFile: 'prod-parameters.yaml'
+        feedName: '$(PROD_FEED_NAME)'
+        failureMessage: "Production stage failed."

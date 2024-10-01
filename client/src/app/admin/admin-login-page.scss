@@ -1,0 +1,40 @@
+@import '../../scss/vars';
+
+.admin-login-page {
+    display: flex;
+    margin: 0 auto;
+    width: 446px;
+    
+    &__container {
+        height: 361px;
+    }
+
+    &__content {
+        margin: 0 auto;
+        padding: 40px;
+    }
+
+    &__image {
+        width: 365px;
+        margin-bottom: 30px;
+    }
+
+    &__login-form-container {
+        margin: 0 auto;
+        display: inline-block;
+
+        &__login-form__fields {
+            padding: 10px 0;
+        }
+    }
+
+    &__error {
+        margin-top: 30px;
+    }
+    
+    &__captcha {
+        margin: 10px auto 20px;
+        height: 78px;
+        width: 304px;
+    }
+}
