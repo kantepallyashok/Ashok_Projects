@@ -73,20 +73,32 @@ stages:
         tags: |
           $(imageTag)
 
-- stage: Deploy
-  displayName: 'Deploy Stage'
+- stage: DeployToDev
+  displayName: 'Deploy to AWS ECS Development'
   jobs:
-
-  - job: DeployToDev
-    displayName: 'Deploy to AWS ECS Development'
+  - job: DeployDev
+    displayName: 'Deploy to Development'
     steps:
     - template: deploy-template.yaml
       parameters:
         environment: 'Development'
         tfvarsFile: 'parameters-dev.tfvars'
 
-  - job: DeployToStaging
-    displayName: 'Deploy to AWS ECS Staging'
+  - job: NotifyDevFailure
+    displayName: 'Notify on Development Failure'
+    dependsOn: DeployDev
+    condition: failed() # Notify if DeployDev fails
+    steps:
+    - script: |
+        echo "Sending failure notification for Development deployment..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Development deployment has failed." --subject "Development Deployment Failure Notification"
+      displayName: 'Send Development Failure Notification'
+
+- stage: DeployToStaging
+  displayName: 'Deploy to AWS ECS Staging'
+  jobs:
+  - job: DeployStaging
+    displayName: 'Deploy to Staging'
     dependsOn: DeployToDev
     condition: succeeded()
     steps:
@@ -95,45 +107,69 @@ stages:
         environment: 'Staging'
         tfvarsFile: 'parameters-staging.tfvars'
 
-  - job: DeployToProd
-    displayName: 'Deploy to AWS ECS Production'
+  - job: NotifyStagingFailure
+    displayName: 'Notify on Staging Failure'
+    dependsOn: DeployStaging
+    condition: failed()
+    steps:
+    - script: |
+        echo "Sending failure notification for Staging deployment..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Staging deployment has failed." --subject "Staging Deployment Failure Notification"
+      displayName: 'Send Staging Failure Notification'
+
+- stage: DeployToProd
+  displayName: 'Deploy to AWS ECS Production'
+  jobs:
+  - job: Approval
+    displayName: 'Approval Job'
     dependsOn: DeployToStaging
     condition: succeeded()
+    steps:
+    - script: |
+        echo "Sending approval notification to $(APPROVER_1_EMAIL) and $(APPROVER_2_EMAIL)..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Please approve the deployment to Production." --subject "Production Deployment Approval Needed"
+      displayName: 'Send Approval Notification to 2 Users'
 
-    jobs:
-    - job: Approval
-      displayName: 'Approval Job'
-      steps:
-      - script: |
-          echo "Sending approval notification to $(APPROVER_1_EMAIL) and $(APPROVER_2_EMAIL)..."
-          aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Please approve the deployment to Production." --subject "Production Deployment Approval Needed"
-        displayName: 'Send Approval Notification to 2 Users'
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'true'
+        approvers: '$(APPROVER_1_EMAIL),$(APPROVER_2_EMAIL)' # Initial approvers
+        timeout: 60 # Wait for 60 minutes for the first approval
+        onTimeout: 'reject'
+        message: 'Please approve the deployment to Production.'
 
-      - task: ManualValidation@0
-        inputs:
-          notifyUsers: 'true'
-          approvers: '$(APPROVER_1_EMAIL),$(APPROVER_2_EMAIL)' # Initial approvers
-          timeout: 60 # Wait for 60 minutes for the first approval
-          onTimeout: 'reject'
-          message: 'Please approve the deployment to Production.'
+    - script: |
+        echo "No approvals received. Sending notification to entire team..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "No approvals received within 60 minutes. Team, please take action." --subject "Final Production Deployment Approval Needed"
+        echo "Waiting for additional 120 minutes for manual approval..."
+        sleep 7200  # Wait for another 2 hours
+      displayName: 'Notify Team of Approval Delay'
+      condition: failed() # Trigger if previous step failed
 
-      - script: |
-          echo "No approvals received. Sending notification to entire team..."
-          aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "No approvals received within 60 minutes. Team, please take action." --subject "Final Production Deployment Approval Needed"
-          echo "Waiting for additional 120 minutes for manual approval..."
-          sleep 7200  # Wait for another 2 hours
-        displayName: 'Notify Team of Approval Delay'
-        condition: failed() # Trigger if previous step failed
+    - task: ManualValidation@0
+      inputs:
+        notifyUsers: 'true'
+        approvers: '$(TEAM_EMAIL)' # Entire team will get approval permission now
+        timeout: 120 # Wait for 2 hours for team approval
+        onTimeout: 'reject'
+        message: 'Please approve the deployment to Production.'
 
-      - task: ManualValidation@0
-        inputs:
-          notifyUsers: 'true'
-          approvers: '$(TEAM_EMAIL)' # Entire team will get approval permission now
-          timeout: 120 # Wait for 2 hours for team approval
-          onTimeout: 'reject'
-          message: 'Please approve the deployment to Production.'
-
+  - job: DeployProd
+    displayName: 'Deploy to Production'
+    dependsOn: Approval
+    condition: succeeded()
+    steps:
     - template: deploy-template.yaml
       parameters:
         environment: 'Production'
         tfvarsFile: 'parameters-prod.tfvars'
+
+  - job: NotifyProductionFailure
+    displayName: 'Notify on Production Failure'
+    dependsOn: DeployProd
+    condition: failed()
+    steps:
+    - script: |
+        echo "Sending failure notification for Production deployment..."
+        aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "Production deployment has failed." --subject "Production Deployment Failure Notification"
+      displayName: 'Send Production Failure Notification'
