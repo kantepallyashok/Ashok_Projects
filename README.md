@@ -1,7 +1,7 @@
 # This Repo contains sample Application, deploying in different tools.
 - 1. Create Infra using AWS cloudformation and deploye app in Ec2 Instances.
-  2. Create Infra using Terraform and deploye app in ec2 Instances.
-  3. create infra using Terraform and Deploye app in K8.
+  2. Create Infra using Terraform and deploye app in Ec2 Instances.
+  3. create infra using Terraform and deploye app in K8.
  
 # Create Infrastructure using AWS CloudFormation and deploy the app in EC2 instances:
   - You will define the infrastructure using CloudFormation templates (YAML or JSON).
