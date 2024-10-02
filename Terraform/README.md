@@ -1,7 +1,7 @@
 # OpenSupports Application Build & Deployment Documentation
 
 ## Overview
-This documentation outlines the deployment of the OpenSupports application using **Terraform** for infrastructure provisioning and **Azure DevOps (ADO)** for CI/CD automation. The project provisions necessary AWS infrastructure and automates deployment across multiple environments (development, staging, production).
+This documentation outlines the deployment of the OpenSupports application using **Terraform** for infrastructure provisioning and **Azure DevOps(ADO)** for CI/CD automation. The project provisions necessary AWS infrastructure and automates deployment across multiple environments (development, staging, production).
 
 ## Agenda
 This assignment involves the development of **Terraform configurations** to provision infrastructure for the **OpenSupports** application, an open-source ticketing system. The primary objectives are:
