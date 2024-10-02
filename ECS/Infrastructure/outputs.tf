@@ -42,3 +42,7 @@ output "ecs_instance_id" {
   description = "The ID of the ECS instance"
   value       = aws_instance.ecs_instance.id
 }
+
+output "sns_topic_arn" {
+  value = aws_sns_topic.app_notifications.arn
+}

@@ -311,3 +311,11 @@ resource "aws_db_instance" "db" {
     Name = "${var.env}-rds-instance"
   }
 }
+
+resource "aws_sns_topic" "app_notifications" {
+  name = "${var.env}-app-notifications"
+
+  tags = {
+    Name = "${var.env}-app-notifications"
+  }
+}
