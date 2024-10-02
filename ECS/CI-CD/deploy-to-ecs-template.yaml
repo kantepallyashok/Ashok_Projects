@@ -1,0 +1,43 @@
+parameters:
+- name: environment
+  type: string
+- name: tfvarsFile
+  type: string
+
+jobs:
+- job: DeployToEnvironment
+  displayName: 'Deploy to $(environment) Environment'
+  steps:
+  - task: TerraformInstaller@0
+    inputs:
+      terraformVersion: 'latest' # or specify a version
+
+  - script: |
+      cd Infrastructure
+      terraform init
+    displayName: 'Terraform Init'
+
+  - script: |
+      cd Infrastructure
+      terraform apply -auto-approve -var-file=$(tfvarsFile)
+    displayName: 'Terraform Apply'
+
+  - script: |
+      cd Infrastructure
+      # Get the ECS cluster and service names from Terraform output
+      cluster_name=$(terraform output -raw cluster_name)
+      frontend_service=$(terraform output -raw frontend_service_name)
+      backend_service=$(terraform output -raw backend_service_name)
+
+      echo "ECS Cluster: $cluster_name"
+      echo "Deploying Frontend Service: $frontend_service"
+      echo "Deploying Backend Service: $backend_service"
+
+      # Deploy the Docker images to AWS ECS for both services
+      aws ecs update-service --cluster $cluster_name --service $frontend_service --force-new-deployment
+      aws ecs update-service --cluster $cluster_name --service $backend_service --force-new-deployment
+    displayName: 'Deploy to ECS'
+    env:
+      AWS_DEFAULT_REGION: $(awsRegion)
+      AWS_ACCESS_KEY_ID: '<YourAWSAccessKeyId>' # Use appropriate access keys or set via service connection
+      AWS_SECRET_ACCESS_KEY: '<YourAWSSecretKey>' # Optional, if not using service connection

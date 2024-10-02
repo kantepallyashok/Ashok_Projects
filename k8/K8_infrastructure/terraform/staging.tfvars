@@ -1,0 +1,11 @@
+region               = "us-east-1"
+vpc_cidr_block      = "10.0.0.0/16"
+subnet_a_cidr_block = "10.0.1.0/24"
+subnet_b_cidr_block = "10.0.2.0/24"
+availability_zone   = "us-east-1a"
+cluster_name        = "my-k8s-cluster-staging"
+cluster_role_arn    = "arn:aws:iam::YOUR_ACCOUNT_ID:role/eks-cluster-role-staging"
+node_role_arn       = "arn:aws:iam::YOUR_ACCOUNT_ID:role/eks-node-group-role-staging"
+node_desired_size   = 2
+node_max_size       = 5
+node_min_size       = 1

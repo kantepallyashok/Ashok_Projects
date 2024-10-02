@@ -1,0 +1,25 @@
+# infra-template.yaml
+parameters:
+- name: stageName
+  type: string
+- name: parametersFile
+  type: string
+
+steps:
+- task: TerraformInstaller@0
+  inputs:
+    terraformVersion: 'latest'
+
+- task: TerraformCLI@0
+  inputs:
+    provider: 'aws'
+    command: 'init'
+    workingDirectory: '$(Build.SourcesDirectory)/infrastructure/terraform'
+
+- task: TerraformCLI@0
+  inputs:
+    provider: 'aws'
+    command: 'apply'
+    workingDirectory: '$(Build.SourcesDirectory)/infrastructure/terraform'
+    environmentServiceName: '<YourAWSServicConnection>' # Service connection for AWS
+    commandOptions: '-auto-approve -var-file=$(Build.SourcesDirectory)/infrastructure/terraform/$(parameters.parametersFile)'
