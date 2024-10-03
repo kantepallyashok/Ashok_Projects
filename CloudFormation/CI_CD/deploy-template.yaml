@@ -1,4 +1,3 @@
-# deploy-template.yaml
 parameters:
 - name: stageName
   type: string
@@ -11,7 +10,6 @@ parameters:
 - name: failureMessage
   type: string
 
-
 jobs:
 - job: CheckoutAndCreateInfrastructure
   displayName: 'Checkout and Create Infrastructure for $(stageName)'
@@ -20,7 +18,7 @@ jobs:
   - script: |
       echo "Creating Infrastructure for $(stageName)..."
       aws cloudformation create-stack --stack-name $(stackName) \
-        --template-body file://Infrastructure/Infrastructure.yaml \
+        --template-body file://CF_templates/templates/Infrastructure.yaml \
         --parameters file://CF_templates/parameters/$(parametersFile)
 
     displayName: 'Create $(stageName) Infrastructure'
