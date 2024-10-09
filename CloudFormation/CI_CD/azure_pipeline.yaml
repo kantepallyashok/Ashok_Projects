@@ -38,7 +38,7 @@ stages:
     steps:
     - checkout: self
     - script: |
-        echo "1/3 Building frontend..."
+        echo "Building frontend..."
         cd client
         npm install
         npm run build
@@ -46,36 +46,44 @@ stages:
 
   - job: BuildBackend
     displayName: 'Build Backend'
-    dependsOn: BuildFrontend
     steps:
     - checkout: self
     - script: |
-        echo "2/3 Building backend..."
+        echo "Building backend..."
         cd server
         make build
         make install
       displayName: 'Build Backend'
 
-  - job: RunTests
-    displayName: 'Run Tests'
-    dependsOn: BuildBackend
+  # Running tests in parallel after each build
+  - job: RunFrontendTests
+    displayName: 'Run Frontend Tests'
+    dependsOn: BuildFrontend
     steps:
     - checkout: self
-    - script: |
-        echo "3/3 Running backend tests..."
-        cd server
-        make test
-      displayName: 'Run Backend Tests'
-
     - script: |
         echo "Running frontend tests..."
         cd client
         npm test
       displayName: 'Run Frontend Tests'
 
+  - job: RunBackendTests
+    displayName: 'Run Backend Tests'
+    dependsOn: BuildBackend
+    steps:
+    - checkout: self
+    - script: |
+        echo "Running backend tests..."
+        cd server
+        make test
+      displayName: 'Run Backend Tests'
+
+  # Create artifact after both frontend and backend builds/tests succeed
   - job: CreateArtifact
     displayName: 'Create Artifacts'
-    dependsOn: RunTests
+    dependsOn:
+    - RunFrontendTests
+    - RunBackendTests
     steps:
     - checkout: self
     - script: |
@@ -111,9 +119,21 @@ stages:
       command: 's3 cp'
       arguments: '$(Pipeline.Workspace)/dist/opensupports.zip s3://$(S3_BUCKET_NAME)/opensupports.zip' # Upload the artifact to S3
 
+# Deployement starts from here
+
+- stage: PublishArtifact
+  displayName: 'Publish Artifacts'
+  jobs:
+  - job: Publish
+    steps:
+    - publish: dist/opensupports.zip
+      artifact: opensupports
+
 - stage: Dev
   displayName: 'Development Stage'
-  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'dev-parameters.yaml'))
+  dependsOn: PublishArtifact
+  condition: and( succeeded('PublishArtifact'), or( eq(variables['Build.Reason'], 'Manual'), eq(variables['Build.Reason'], 'PullRequest'), contains(variables['Build.SourceBranch'], 'dev-parameters.yaml'), contains(variables['Build.SourceBranch'], 'refs/heads/develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/') ) )
+
   steps:
   - template: deploy-template.yaml
     parameters:
@@ -122,11 +142,13 @@ stages:
       parametersFile: 'dev-parameters.yaml'
       feedName: '$(DEV_FEED_NAME)'
       failureMessage: "Dev stage failed."
+      appPort: 3000
 
 - stage: Staging
+
   displayName: 'Staging Stage'
-  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'staging-parameters.yaml'))
   dependsOn: Dev
+  condition: and( succeeded('Dev'), or( eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'staging-parameters.yaml'), startsWith(variables['Build.SourceBranch'], 'refs/heads/develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/') ) )
   steps:
   - template: deploy-template.yaml
     parameters:
@@ -135,6 +157,7 @@ stages:
       parametersFile: 'staging-parameters.yaml'
       feedName: '$(STAGING_FEED_NAME)'
       failureMessage: "Staging stage failed."
+      appPort: 4000
 
 #After staging stage gets success, it will wait for approval from 2 users, for 60 minutes,
 #if 2 users  didnt respond, it will send notification to entire team mail, and someone has to approve manulaly. if deployement fails, it sends notification.
@@ -143,9 +166,9 @@ stages:
 
 
 - stage: Prod
+
   displayName: 'Production Stage'
-  condition: or(eq(variables['Build.Reason'], 'Manual'), contains(variables['Build.SourceBranch'], 'prod-parameters.yaml'))
-  dependsOn: Staging
+  condition: and( succeeded('Staging'), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
   jobs:
   - job: Approval
     displayName: 'Approval Job'
@@ -186,3 +209,4 @@ stages:
         parametersFile: 'prod-parameters.yaml'
         feedName: '$(PROD_FEED_NAME)'
         failureMessage: "Production stage failed."
+        appPort: 5000

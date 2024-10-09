@@ -1,4 +1,3 @@
-# ASHOK_Practise
 # OpenSupports Application Build & Deployment Documentation
 
 ## Overview
@@ -140,8 +139,39 @@ Steps to deploye application:
 3. Note down all AWS keys, and variables need to give as pipeline secret variables, while creating pipeline give this secrets.
 4. Run the pipeline, check the stages are successfully completed or not and check email is sending notification or not.
 5. check application running or not by using "http://your-ec2-public-ip:your-port-number"
-**Ex:** 
+Ex: 
    - ssh -i path/to/your/key.pem ubuntu@your-ec2-public-ip
    - curl http://localhost:your-port-number
    - systemctl status your-service-name
 
+# **Cost Optimization Suggestions for AWS CloudFormation Template**
+To make the AWS CloudFormation template more cost-effective while maintaining security and management features, here are some suggestions:
+
+## **Instance Sizing and Auto-Scaling:**
+
+- Replace fixed EC2 instance types (`InstanceType: !Ref InstanceType`) with a parameterized or spot instance option, or use **Auto Scaling Groups (ASGs)** to manage scaling based on demand.
+- You can add the option for **EC2 Spot Instances** if workloads allow. Spot instances are significantly cheaper than on-demand instances.
+
+## **RDS Optimizations:**
+
+- Consider using **Amazon RDS Aurora** instead of standard RDS for potentially better cost-performance optimization, especially for MySQL workloads.
+- Enable **RDS Multi-AZ** deployment only if required for production. In development or staging environments, a single instance is more cost-effective.
+- Scale down **AllocatedStorage** for RDS to the minimum required size or utilize **RDS storage autoscaling**.
+
+## **S3 Bucket and CloudFront:**
+
+- Use **S3 Intelligent-Tiering** for cost-optimized storage based on access patterns if your bucket stores files that are accessed less frequently.
+- If your application needs to serve static files globally, consider adding **CloudFront** in front of the S3 bucket to minimize bandwidth costs.
+
+## **Use Reserved Instances (RI) or Savings Plans:**
+
+- For long-running workloads, use **Reserved Instances** or **Savings Plans** to save up to 72% on EC2 and RDS compared to on-demand instances.
+
+## **CloudWatch and Monitoring:**
+
+- Review the frequency of **CloudWatch metrics** (e.g., period = 300 seconds). Lowering the monitoring frequency can reduce costs.
+- Consider consolidating **CloudWatch alarms** and using **Composite Alarms** to minimize the number of active alarms.
+
+## **Security Groups:**
+
+- Review your **Security Groups** for unnecessary open ports (e.g., open SSH to 0.0.0.0/0). Instead, restrict access to specific IPs or use **AWS Systems Manager Session Manager** for secure SSH access without needing port 22 open.

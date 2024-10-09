@@ -9,6 +9,8 @@ parameters:
   type: string
 - name: failureMessage
   type: string
+- name: appPort
+  type: int # Add this parameter for the application port
 
 jobs:
 - job: CheckoutAndCreateInfrastructure
@@ -39,18 +41,52 @@ jobs:
     inputs:
       secureFile: '$(PEM_FILE_PATH)' # Name of the PEM file in Secure Files
 
-  - script: |
-      echo "Deploying to $(stageName) Environment..."
-      chmod 400 $(downloadPemFile.secureFilePath)
-      mkdir -p ~/artifacts && cd ~/artifacts
-      echo "Downloading opensupports artifact..."
-      az artifacts universal download --name opensupports --version 1.0.0 --path . --feed $(feedName)
-      echo "Deploying to EC2 instance..."
-      scp -i $(downloadPemFile.secureFilePath) -r * ec2-user@$(EC2_IP):/path/to/deployment/directory
-    displayName: 'Deploy to $(stageName)'
+- script: |
+    echo "Deploying to $(stageName) Environment..."
+    chmod 400 $(downloadPemFile.secureFilePath)
 
-  - script: |
-      echo "Sending failure notification if the job fails..."
-      aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "$(failureMessage)" --subject "Stage Failure Notification"
-    displayName: 'Send Failure Notification'
-    condition: failed()
+    # Create a directory for the artifacts and navigate to it
+    mkdir -p ~/artifacts && cd ~/artifacts
+
+    echo "Downloading opensupports artifact..."
+    az artifacts universal download --name opensupports --version 1.0.0 --path . --feed $(feedName)
+
+    echo "Deploying to EC2 instance..."
+    scp -i $(downloadPemFile.secureFilePath) -r * ec2-user@$(EC2_IP):/path/to/deployment/directory
+
+    echo "Running installation on the EC2 instance..."
+    ssh -i $(downloadPemFile.secureFilePath) ec2-user@$(EC2_IP) << 'ENDSSH'
+      # Navigate to the directory where the artifact was copied
+      cd /path/to/deployment/directory
+
+      # If the artifact is a zip file, you may need to unzip it
+      if [[ -f "opensupports.zip" ]]; then
+          unzip opensupports.zip
+      fi
+
+      # Run the installation script
+      if [[ -f "install.sh" ]]; then
+          chmod +x install.sh  # Make sure the installation script is executable
+          ./install.sh         # Execute the installation script
+      else
+          echo "Installation script not found!"
+          exit 1
+      fi
+
+      # Perform post-deployment checks
+      if curl -f http://localhost:$(appPort)/health; then
+          echo "Application is running successfully."
+      else
+          echo "Application failed to start."
+          exit 1
+      fi
+
+      echo "Deployment completed successfully."
+    ENDSSH
+  displayName: 'Deploy to $(stageName)'
+
+- script: |
+    echo "Sending failure notification if the job fails..."
+    aws sns publish --topic-arn $(SNS_TOPIC_ARN) --message "$(failureMessage)" --subject "Stage Failure Notification"
+  displayName: 'Send Failure Notification'
+  condition: failed()
