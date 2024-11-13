@@ -4,7 +4,6 @@ provider "aws" {
 
 resource "aws_vpc" "k8s_vpc" {
   cidr_block = var.vpc_cidr_block
-
   tags = {
     Name = "${var.cluster_name}-vpc"
   }
@@ -51,7 +50,7 @@ resource "aws_security_group" "k8s_sg" {
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # Allow access to the Kubernetes API from anywhere
+    cidr_blocks = ["0.0.0.0/0"]  # Allow access to Kubernetes API from anywhere
   }
 
   tags = {
@@ -146,12 +145,17 @@ resource "aws_launch_configuration" "k8s_worker" {
               systemctl start docker
               systemctl enable docker
               
-              # Install kubeadm, kubelet, and kubectl
+              # Install ContainerD, kubeadm, kubelet, kubectl
               curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-              echo "deb http://apt.kubernetes.io/ kubernetes-xenial main" | tee -a /etc/apt/sources.list.d/kubernetes.list
-              yum install -y kubelet kubeadm kubectl
+              echo "deb https://download.docker.com/linux/centos/docker-ce.repo" | tee /etc/yum.repos.d/docker.repo
+              yum install -y containerd kubelet kubeadm kubectl
+              systemctl enable containerd && systemctl start containerd
               systemctl enable kubelet && systemctl start kubelet
               
+              # Install Calico CNI for networking
+              curl -s https://docs.projectcalico.org/manifests/calico.yaml -o /tmp/calico.yaml
+              kubectl apply -f /tmp/calico.yaml
+
               # Retrieve and execute the join command from SSM Parameter Store
               JOIN_COMMAND=$(aws ssm get-parameter --name "/${var.cluster_name}/kubeadm_join_command" --with-decryption --query "Parameter.Value" --output text)
               $JOIN_COMMAND
