@@ -4,7 +4,6 @@ provider "aws" {
 
 resource "aws_vpc" "k8s_vpc" {
   cidr_block = var.vpc_cidr_block
-
   tags = {
     Name = "${var.cluster_name}-vpc"
   }
@@ -51,14 +50,13 @@ resource "aws_security_group" "k8s_sg" {
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # Allow access to the Kubernetes API from anywhere
+    cidr_blocks = ["0.0.0.0/0"]  # Allow access to Kubernetes API from anywhere
   }
 
   tags = {
     Name = "${var.cluster_name}-sg"
   }
 }
-
 
 resource "aws_iam_role" "k8s_role" {
   name = "${var.cluster_name}-role"
@@ -83,10 +81,37 @@ resource "aws_iam_instance_profile" "k8s_instance_profile" {
 
 resource "aws_launch_configuration" "k8s_master" {
   name_prefix          = "${var.cluster_name}-master-"
-  image_id            = "ami-0c55b159cbfafe1f0"  # Update with the latest Amazon Linux 2 AMI
-  instance_type       = "t2.medium"
-  security_groups     = [aws_security_group.k8s_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.k8s_instance_profile.id  # Reference the id
+  image_id             = "ami-0c55b159cbfafe1f0"  # Update with the latest Amazon Linux 2 AMI
+  instance_type        = "t2.medium"
+  security_groups      = [aws_security_group.k8s_sg.id]
+  iam_instance_profile = aws_iam_instance_profile.k8s_instance_profile.id
+
+  user_data = <<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install -y docker
+              systemctl start docker
+              systemctl enable docker
+              
+              # Install kubeadm, kubelet, and kubectl
+              curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+              echo "deb http://apt.kubernetes.io/ kubernetes-xenial main" | tee -a /etc/apt/sources.list.d/kubernetes.list
+              yum install -y kubelet kubeadm kubectl
+              systemctl enable kubelet && systemctl start kubelet
+              
+              # Initialize Kubernetes master
+              kubeadm init --pod-network-cidr=10.244.0.0/16
+
+              # Set up kubeconfig for kubectl access
+              mkdir -p /home/ec2-user/.kube
+              cp -i /etc/kubernetes/admin.conf /home/ec2-user/.kube/config
+              chown ec2-user:ec2-user /home/ec2-user/.kube/config
+
+              # Generate and store the join command in SSM Parameter Store
+              kubeadm token create --ttl 0
+              JOIN_COMMAND=$(kubeadm token create --ttl 0 --print-join-command)
+              aws ssm put-parameter --name "/${var.cluster_name}/kubeadm_join_command" --value "$JOIN_COMMAND" --type SecureString
+              EOF
 
   lifecycle {
     create_before_destroy = true
@@ -108,10 +133,33 @@ resource "aws_autoscaling_group" "k8s_master_asg" {
 
 resource "aws_launch_configuration" "k8s_worker" {
   name_prefix          = "${var.cluster_name}-worker-"
-  image_id            = "ami-0c55b159cbfafe1f0"  # Update with the latest Amazon Linux 2 AMI
-  instance_type       = "t2.medium"
-  security_groups     = [aws_security_group.k8s_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.k8s_instance_profile.id  # Reference the id
+  image_id             = "ami-0c55b159cbfafe1f0"  # Update with the latest Amazon Linux 2 AMI
+  instance_type        = "t2.medium"
+  security_groups      = [aws_security_group.k8s_sg.id]
+  iam_instance_profile = aws_iam_instance_profile.k8s_instance_profile.id
+
+  user_data = <<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install -y docker
+              systemctl start docker
+              systemctl enable docker
+              
+              # Install ContainerD, kubeadm, kubelet, kubectl
+              curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+              echo "deb https://download.docker.com/linux/centos/docker-ce.repo" | tee /etc/yum.repos.d/docker.repo
+              yum install -y containerd kubelet kubeadm kubectl
+              systemctl enable containerd && systemctl start containerd
+              systemctl enable kubelet && systemctl start kubelet
+              
+              # Install Calico CNI for networking
+              curl -s https://docs.projectcalico.org/manifests/calico.yaml -o /tmp/calico.yaml
+              kubectl apply -f /tmp/calico.yaml
+
+              # Retrieve and execute the join command from SSM Parameter Store
+              JOIN_COMMAND=$(aws ssm get-parameter --name "/${var.cluster_name}/kubeadm_join_command" --with-decryption --query "Parameter.Value" --output text)
+              $JOIN_COMMAND
+              EOF
 
   lifecycle {
     create_before_destroy = true
